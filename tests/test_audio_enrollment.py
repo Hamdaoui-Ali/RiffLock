@@ -52,8 +52,19 @@ def test_riff_enrollment_saves_template_and_enables_owner_flag(tmp_path: Path) -
     assert stored_template is not None
     decoded = deserialize_riff_template(stored_template.template_data)
     assert np.allclose(decoded.vector, result.template.vector)
+    assert len(decoded.sample_templates) == REQUIRED_RIFF_RECORDINGS
+    assert np.allclose(decoded.sample_templates[0].vector, np.array([1.0, 2.0, 3.0], dtype=np.float32))
     assert stored_template.recording_count == REQUIRED_RIFF_RECORDINGS
     assert b"raw-audio" not in stored_template.template_data
+
+
+def test_riff_template_deserialization_supports_older_payloads_without_samples() -> None:
+    decoded = deserialize_riff_template(
+        b'{"sample_rate":22050,"vector":[1.0,2.0,3.0],"chroma_sequence":null,"onset_count":2}'
+    )
+
+    assert np.allclose(decoded.vector, np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    assert decoded.sample_templates == ()
 
 
 def test_riff_enrollment_requires_password_confirmation(tmp_path: Path) -> None:
@@ -129,7 +140,10 @@ def _build_service(
 
 
 def _template(values: list[float]) -> RiffFeatureTemplate:
+    vector = np.asarray(values, dtype=np.float32)
     return RiffFeatureTemplate(
-        vector=np.asarray(values, dtype=np.float32),
+        vector=vector,
         sample_rate=22050,
+        chroma_sequence=np.tile(vector.reshape(-1, 1), (1, 2)),
+        onset_count=2,
     )

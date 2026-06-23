@@ -27,15 +27,22 @@ from rifflock.files.protect import (
     FileProtectionResult,
     FileProtectionService,
 )
-from rifflock.files.restore import FileRestoreResult, FileRestoreService
+from rifflock.files.restore import (
+    DecryptedFileResult,
+    FileRestoreResult,
+    FileRestoreService,
+    FileViewingResult,
+)
 
 __all__ = [
     "FILE_ENCRYPTION_ALGORITHM",
+    "DecryptedFileResult",
     "FailedFolderItem",
     "FileProtectionResult",
     "FileProtectionService",
     "FileRestoreResult",
     "FileRestoreService",
+    "FileViewingResult",
     "FolderProtectionResult",
     "FolderProtectionService",
     "ProtectedItemService",

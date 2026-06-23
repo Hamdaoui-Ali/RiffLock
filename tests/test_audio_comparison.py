@@ -5,6 +5,7 @@ import pytest
 
 from rifflock.audio import (
     COMPARISON_FAILURE_MESSAGE,
+    RiffFeatureExtractionService,
     RiffFeatureTemplate,
     RiffSimilarityService,
 )
@@ -39,11 +40,65 @@ def test_riff_similarity_different_templates_fail() -> None:
     assert result.passed is False
 
 
+def test_riff_similarity_uses_best_enrolled_take_instead_of_only_average() -> None:
+    service = RiffSimilarityService(AudioSettings(similarity_threshold=0.8))
+    stored = RiffFeatureTemplate(
+        vector=np.asarray([10.0, 10.0, 10.0, 10.0], dtype=np.float32),
+        sample_rate=22050,
+        sample_templates=(
+            _template([1.0, 2.0, 3.0, 4.0]),
+            _template([7.0, 7.0, 7.0, 7.0]),
+        ),
+    )
+
+    result = service.compare(stored, _template([1.02, 2.01, 2.99, 4.0]))
+
+    assert result.passed is True
+    assert result.score > 0.95
+
+
+def test_riff_similarity_accepts_same_notes_with_timing_and_level_variation() -> None:
+    sample_rate = 22050
+    extractor = RiffFeatureExtractionService()
+    service = RiffSimilarityService(AudioSettings(similarity_threshold=0.8))
+    stored = extractor.extract(
+        _synthetic_riff(
+            sample_rate=sample_rate,
+            frequencies=[220.0, 247.0, 294.0, 330.0],
+            durations=[0.35, 0.35, 0.40, 0.45],
+        ),
+        sample_rate,
+    )
+    same_notes = extractor.extract(
+        _synthetic_riff(
+            sample_rate=sample_rate,
+            frequencies=[220.0, 247.0, 294.0, 330.0],
+            durations=[0.42, 0.30, 0.46, 0.39],
+            amplitude=0.35,
+            start_silence_seconds=0.08,
+        ),
+        sample_rate,
+    )
+    different_notes = extractor.extract(
+        _synthetic_riff(
+            sample_rate=sample_rate,
+            frequencies=[392.0, 440.0, 494.0, 523.0],
+            durations=[0.42, 0.30, 0.46, 0.39],
+            amplitude=0.35,
+            start_silence_seconds=0.08,
+        ),
+        sample_rate,
+    )
+
+    assert service.compare(stored, same_notes).passed is True
+    assert service.compare(stored, different_notes).passed is False
+
+
 def test_riff_similarity_threshold_behavior_uses_configured_threshold() -> None:
     strict = RiffSimilarityService(AudioSettings(similarity_threshold=0.95))
     relaxed = RiffSimilarityService(AudioSettings(similarity_threshold=0.7))
     stored = _template([1.0, 2.0, 3.0, 4.0])
-    candidate = _template([1.1, 2.0, 3.1, 4.0])
+    candidate = _template([1.3, 2.0, 3.3, 4.0])
 
     strict_result = strict.compare(stored, candidate)
     relaxed_result = relaxed.compare(stored, candidate)
@@ -79,3 +134,28 @@ def _template(values: list[float]) -> RiffFeatureTemplate:
         vector=np.asarray(values, dtype=np.float32),
         sample_rate=22050,
     )
+
+
+def _synthetic_riff(
+    *,
+    sample_rate: int,
+    frequencies: list[float],
+    durations: list[float],
+    amplitude: float = 0.5,
+    start_silence_seconds: float = 0.0,
+) -> np.ndarray:
+    parts: list[np.ndarray] = []
+    if start_silence_seconds > 0:
+        parts.append(np.zeros(int(sample_rate * start_silence_seconds), dtype=np.float32))
+    for frequency, duration in zip(frequencies, durations):
+        timeline = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+        envelope = np.minimum(np.linspace(0.0, 1.0, timeline.size), 1.0)
+        envelope *= np.linspace(1.0, 0.75, timeline.size)
+        parts.append((amplitude * envelope * np.sin(2 * np.pi * frequency * timeline)).astype(np.float32))
+        parts.append(np.zeros(int(sample_rate * 0.03), dtype=np.float32))
+
+    samples = np.concatenate(parts)
+    target_length = sample_rate * 3
+    if samples.size < target_length:
+        samples = np.pad(samples, (0, target_length - samples.size))
+    return samples[:target_length].astype(np.float32)

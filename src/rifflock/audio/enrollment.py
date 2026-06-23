@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from logging import Logger
+from typing import Callable
 
 import numpy as np
 
@@ -47,7 +48,13 @@ class RiffEnrollmentService:
         self._password_service = password_service or PasswordService()
         self._logger = logger
 
-    def enroll(self, owner_account_id: int, password_confirmation: str) -> RiffEnrollmentResult:
+    def enroll(
+        self,
+        owner_account_id: int,
+        password_confirmation: str,
+        *,
+        before_recording: Callable[[int, int], None] | None = None,
+    ) -> RiffEnrollmentResult:
         owner_account = self._owner_repository.get_by_id(owner_account_id)
         if owner_account is None:
             raise AuthenticationError(
@@ -61,7 +68,9 @@ class RiffEnrollmentService:
             )
 
         templates: list[RiffFeatureTemplate] = []
-        for _ in range(REQUIRED_RIFF_RECORDINGS):
+        for attempt_index in range(REQUIRED_RIFF_RECORDINGS):
+            if before_recording is not None:
+                before_recording(attempt_index + 1, REQUIRED_RIFF_RECORDINGS)
             recording = self._recording_service.record()
             templates.append(
                 self._feature_extraction_service.extract(
@@ -88,6 +97,8 @@ class RiffEnrollmentService:
             )
         sample_rate = templates[0].sample_rate
         vectors = []
+        chroma_sequences = []
+        onset_counts = []
         for template in templates:
             if template.sample_rate != sample_rate:
                 raise AuthenticationError(
@@ -95,6 +106,13 @@ class RiffEnrollmentService:
                     log_message="Riff enrollment rejected because template sample rates do not match.",
                 )
             vectors.append(np.asarray(template.vector, dtype=np.float32))
+            if template.chroma_sequence is None:
+                raise AuthenticationError(
+                    "Riff enrollment could not be completed.",
+                    log_message="Riff enrollment rejected because chroma sequence is missing.",
+                )
+            chroma_sequences.append(np.asarray(template.chroma_sequence, dtype=np.float32))
+            onset_counts.append(int(template.onset_count))
 
         first_shape = vectors[0].shape
         if any(vector.shape != first_shape for vector in vectors[1:]):
@@ -102,10 +120,19 @@ class RiffEnrollmentService:
                 "Riff enrollment could not be completed.",
                 log_message="Riff enrollment rejected because template shapes do not match.",
             )
+        first_chroma_shape = chroma_sequences[0].shape
+        if any(sequence.shape != first_chroma_shape for sequence in chroma_sequences[1:]):
+            raise AuthenticationError(
+                "Riff enrollment could not be completed.",
+                log_message="Riff enrollment rejected because chroma sequence shapes do not match.",
+            )
 
         return RiffFeatureTemplate(
             vector=np.mean(np.stack(vectors, axis=0), axis=0).astype(np.float32),
             sample_rate=sample_rate,
+            chroma_sequence=np.mean(np.stack(chroma_sequences, axis=0), axis=0).astype(np.float32),
+            onset_count=int(round(float(np.mean(onset_counts)))),
+            sample_templates=tuple(templates),
         )
 
     def _save_template(
@@ -151,18 +178,55 @@ class RiffEnrollmentService:
 
 
 def serialize_riff_template(template: RiffFeatureTemplate) -> bytes:
-    payload = {
-        "sample_rate": template.sample_rate,
-        "vector": np.asarray(template.vector, dtype=np.float32).tolist(),
-    }
-    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        _serialize_template_payload(template, include_samples=True),
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def deserialize_riff_template(template_data: bytes) -> RiffFeatureTemplate:
     payload = json.loads(template_data.decode("utf-8"))
+    return _deserialize_template_payload(payload)
+
+
+def _serialize_template_payload(
+    template: RiffFeatureTemplate,
+    *,
+    include_samples: bool,
+) -> dict:
+    payload = {
+        "sample_rate": template.sample_rate,
+        "vector": np.asarray(template.vector, dtype=np.float32).tolist(),
+        "chroma_sequence": (
+            np.asarray(template.chroma_sequence, dtype=np.float32).tolist()
+            if template.chroma_sequence is not None
+            else None
+        ),
+        "onset_count": int(template.onset_count),
+    }
+    if include_samples:
+        payload["sample_templates"] = [
+            _serialize_template_payload(sample, include_samples=False)
+            for sample in template.sample_templates
+        ]
+    return payload
+
+
+def _deserialize_template_payload(payload: dict) -> RiffFeatureTemplate:
+    chroma_sequence = payload.get("chroma_sequence")
     return RiffFeatureTemplate(
         vector=np.asarray(payload["vector"], dtype=np.float32),
+        chroma_sequence=(
+            None
+            if chroma_sequence is None
+            else np.asarray(chroma_sequence, dtype=np.float32)
+        ),
+        onset_count=int(payload.get("onset_count", 0)),
         sample_rate=int(payload["sample_rate"]),
+        sample_templates=tuple(
+            _deserialize_template_payload(sample)
+            for sample in payload.get("sample_templates", [])
+        ),
     )
 
 

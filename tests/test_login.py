@@ -7,12 +7,15 @@ import pytest
 
 from rifflock.auth import (
     GENERIC_LOGIN_ERROR,
+    LockoutService,
     LoginService,
     OwnerSetupRequest,
     OwnerSetupService,
     SessionService,
 )
+from rifflock.config import LockoutSettings
 from rifflock.storage import KeyVaultRepository, OwnerAccountRepository, initialize_database
+from rifflock.storage import AuthAttemptRepository
 from rifflock.ui.routes import determine_initial_route
 from rifflock.utils.errors import AuthenticationError
 
@@ -127,11 +130,31 @@ def test_riff_2fa_enabled_routes_to_riff_verification(tmp_path: Path) -> None:
     assert result.pending_riff_verification.owner_email == "owner@example.com"
 
 
+def test_login_reset_failed_attempts_clears_password_lockout_history(tmp_path: Path) -> None:
+    database_path = _database_path(tmp_path)
+    login_service, _, _ = _build_login_service_with_owner(tmp_path)
+    auth_attempt_repository = AuthAttemptRepository(database_path)
+    lockout_service = LockoutService(
+        auth_attempt_repository=auth_attempt_repository,
+        lockout_settings=LockoutSettings(),
+    )
+    lockout_service.record_failed_password_attempt("owner@example.com")
+    lockout_service.record_failed_password_attempt("owner@example.com")
+    lockout_service.record_failed_password_attempt("owner@example.com")
+
+    login_service.reset_failed_attempts("owner@example.com")
+
+    assert auth_attempt_repository.list_by_identifier_and_type("owner@example.com", "password") == []
+    result = login_service.login("owner@example.com", "StrongPass123!")
+    assert result.next_screen == "dashboard"
+
+
 def _build_login_service_with_owner(tmp_path: Path):
     database_path = _database_path(tmp_path)
     initialize_database(database_path)
     owner_repository = OwnerAccountRepository(database_path)
     key_vault_repository = KeyVaultRepository(database_path)
+    auth_attempt_repository = AuthAttemptRepository(database_path)
     owner_setup_service = OwnerSetupService(owner_repository, key_vault_repository)
     setup_result = owner_setup_service.create_owner_account(
         OwnerSetupRequest(
@@ -146,6 +169,8 @@ def _build_login_service_with_owner(tmp_path: Path):
         owner_repository=owner_repository,
         key_vault_repository=key_vault_repository,
         session_service=session_service,
+        auth_attempt_repository=auth_attempt_repository,
+        lockout_settings=LockoutSettings(),
     )
     return login_service, session_service, setup_result
 

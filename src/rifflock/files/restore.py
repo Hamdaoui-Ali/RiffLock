@@ -25,6 +25,20 @@ class FileRestoreResult:
     protected_item: ProtectedItemRecord | None
 
 
+@dataclass(frozen=True)
+class DecryptedFileResult:
+    protected_path: Path
+    original_filename: str
+    plaintext: bytes
+
+
+@dataclass(frozen=True)
+class FileViewingResult:
+    protected_path: Path
+    viewing_path: Path
+    original_filename: str
+
+
 class FileRestoreService:
     """Restore a `.rifflock` artifact safely using the unlocked data key."""
 
@@ -80,6 +94,45 @@ class FileRestoreService:
             protected_path=protected,
             restored_path=final_output,
             protected_item=protected_item,
+        )
+
+    def decrypt_file(
+        self,
+        protected_path: Path | str,
+        data_key: bytes,
+    ) -> DecryptedFileResult:
+        protected = Path(protected_path)
+        if not protected.exists() or not protected.is_file():
+            raise FileOperationError("The selected .rifflock file could not be opened.")
+
+        container = parse_container(protected.read_bytes())
+        try:
+            nonce = base64.b64decode(str(container.metadata["nonce"]))
+            plaintext = AESGCM(data_key).decrypt(nonce, container.payload, None)
+        except (ValueError, InvalidTag) as error:
+            raise FileOperationError("The selected .rifflock file could not be opened.") from error
+
+        return DecryptedFileResult(
+            protected_path=protected,
+            original_filename=Path(str(container.metadata["original_filename"])).name,
+            plaintext=plaintext,
+        )
+
+    def prepare_file_for_viewing(
+        self,
+        protected_path: Path | str,
+        data_key: bytes,
+    ) -> FileViewingResult:
+        decrypted = self.decrypt_file(protected_path, data_key)
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
+        viewing_dir = self._temp_dir / f"view-{uuid4().hex}"
+        viewing_dir.mkdir(parents=True, exist_ok=True)
+        viewing_path = viewing_dir / decrypted.original_filename
+        viewing_path.write_bytes(decrypted.plaintext)
+        return FileViewingResult(
+            protected_path=decrypted.protected_path,
+            viewing_path=viewing_path,
+            original_filename=decrypted.original_filename,
         )
 
     def _update_metadata_after_restore(

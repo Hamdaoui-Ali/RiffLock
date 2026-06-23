@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from logging import Logger
 
+import librosa
 import numpy as np
 
 from rifflock.utils.errors import AudioProcessingError
@@ -15,6 +16,7 @@ SILENCE_PEAK_THRESHOLD = 1e-4
 NOISE_FLATNESS_THRESHOLD = 0.5
 MEL_BAND_COUNT = 13
 CHROMA_COUNT = 12
+CHROMA_HOP_LENGTH = 512
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,9 @@ class RiffFeatureTemplate:
 
     vector: np.ndarray
     sample_rate: int
+    chroma_sequence: np.ndarray | None = None
+    onset_count: int = 0
+    sample_templates: tuple["RiffFeatureTemplate", ...] = ()
 
 
 class RiffFeatureExtractionService:
@@ -45,7 +50,9 @@ class RiffFeatureExtractionService:
         try:
             mel_summary = self._mel_band_summary(normalized, sample_rate)
             chroma = self._chroma_summary(normalized, sample_rate)
+            chroma_sequence = self._chroma_sequence(normalized, sample_rate)
             envelope = self._envelope(normalized)
+            onset_count = self._onset_count(normalized, sample_rate)
             onset_delta = np.maximum(np.diff(envelope), 0.0)
             temporal = np.array(
                 [
@@ -69,7 +76,12 @@ class RiffFeatureExtractionService:
 
         vector = np.concatenate([mel_summary, chroma, temporal]).astype(np.float32)
         self._log_success(vector.size)
-        return RiffFeatureTemplate(vector=vector, sample_rate=sample_rate)
+        return RiffFeatureTemplate(
+            vector=vector,
+            chroma_sequence=chroma_sequence.astype(np.float32),
+            onset_count=onset_count,
+            sample_rate=sample_rate,
+        )
 
     def _validate_audio(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
         audio = np.asarray(samples, dtype=np.float32)
@@ -130,6 +142,34 @@ class RiffFeatureExtractionService:
         if total > 0:
             chroma /= total
         return chroma.astype(np.float32)
+
+    def _chroma_sequence(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        chroma = librosa.feature.chroma_cens(
+            y=audio,
+            sr=sample_rate,
+            hop_length=CHROMA_HOP_LENGTH,
+            n_chroma=CHROMA_COUNT,
+        )
+        if chroma.ndim != 2 or chroma.shape[1] == 0:
+            raise AudioProcessingError(
+                FEATURE_EXTRACTION_FAILURE_MESSAGE,
+                log_message="Riff feature extraction produced an invalid chroma sequence.",
+            )
+        return chroma
+
+    def _onset_count(self, audio: np.ndarray, sample_rate: int) -> int:
+        onset_envelope = librosa.onset.onset_strength(
+            y=audio,
+            sr=sample_rate,
+            hop_length=CHROMA_HOP_LENGTH,
+        )
+        onsets = librosa.onset.onset_detect(
+            onset_envelope=onset_envelope,
+            sr=sample_rate,
+            hop_length=CHROMA_HOP_LENGTH,
+            units="frames",
+        )
+        return int(len(onsets))
 
     def _envelope(self, audio: np.ndarray, frame_size: int = 2048) -> np.ndarray:
         usable = audio[: audio.size - (audio.size % frame_size)]

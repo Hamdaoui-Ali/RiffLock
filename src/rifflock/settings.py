@@ -86,12 +86,18 @@ class SettingsService:
         self._save_setting(SIMILARITY_THRESHOLD_KEY, f"{validated_threshold:.4f}")
         return self.load()
 
-    def start_riff_enrollment(self, *, password_confirmation: str) -> SettingsState:
+    def start_riff_enrollment(
+        self,
+        *,
+        password_confirmation: str,
+        before_recording: Callable[[int, int], None] | None = None,
+    ) -> SettingsState:
         if self._riff_enrollment_service is None:
             raise StorageError("Riff enrollment is not available.")
         self._riff_enrollment_service.enroll(
             self._get_owner().id,
             password_confirmation,
+            before_recording=before_recording,
         )
         return self.load()
 

@@ -154,6 +154,52 @@ def test_riff_failures_reset_after_successful_verification(tmp_path: Path) -> No
     assert auth_attempt_repository.list_by_identifier_and_type("owner@example.com", "riff") == []
 
 
+def test_riff_reset_failed_attempts_clears_riff_lockout_history(tmp_path: Path) -> None:
+    _, verification_service, session_service, owner_repository, _, auth_attempt_repository = _build_services(
+        tmp_path,
+        matches=True,
+    )
+    owner = owner_repository.get_owner_account()
+    assert owner is not None
+
+    auth_attempt_repository.save(
+        AuthAttemptRecord(
+            id=None,
+            attempt_type="riff",
+            identifier="owner@example.com",
+            was_successful=False,
+            failure_reason="invalid_riff",
+            attempted_at="2026-06-22T00:00:00Z",
+        )
+    )
+    auth_attempt_repository.save(
+        AuthAttemptRecord(
+            id=None,
+            attempt_type="riff",
+            identifier="owner@example.com",
+            was_successful=False,
+            failure_reason="invalid_riff",
+            attempted_at="2026-06-22T00:00:01Z",
+        )
+    )
+    auth_attempt_repository.save(
+        AuthAttemptRecord(
+            id=None,
+            attempt_type="riff",
+            identifier="owner@example.com",
+            was_successful=False,
+            failure_reason="invalid_riff",
+            attempted_at="2026-06-22T00:00:02Z",
+        )
+    )
+
+    verification_service.reset_failed_attempts(owner.email)
+
+    assert auth_attempt_repository.list_by_identifier_and_type("owner@example.com", "riff") == []
+    session = verification_service.verify(_pending_verification(owner.id, owner.email, "StrongPass123!"))
+    assert session_service.get_session() == session
+
+
 class _FakeRecordingService:
     def record(self):
         from rifflock.audio.recording import AudioRecording
@@ -256,9 +302,12 @@ def _build_services(tmp_path: Path, *, matches: bool, clock=None):
 
 
 def _template(values: list[float]) -> RiffFeatureTemplate:
+    vector = np.asarray(values, dtype=np.float32)
     return RiffFeatureTemplate(
-        vector=np.asarray(values, dtype=np.float32),
+        vector=vector,
         sample_rate=22050,
+        chroma_sequence=np.tile(vector.reshape(-1, 1), (1, 2)),
+        onset_count=2,
     )
 
 

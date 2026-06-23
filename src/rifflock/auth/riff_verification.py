@@ -93,6 +93,19 @@ class RiffVerificationService:
             )
         return session
 
+    def reset_failed_attempts(self, owner_email: str) -> None:
+        if self._lockout_service is None:
+            return
+        normalized_email = owner_email.strip().lower()
+        if not normalized_email:
+            return
+        self._lockout_service.reset_riff_failures(normalized_email)
+        if self._logger is not None:
+            self._logger.info(
+                "Riff verification attempts reset from verification screen for identifier=%s",
+                normalized_email,
+            )
+
     def _ensure_not_locked_out(self, identifier: str) -> None:
         if self._lockout_service is None:
             return

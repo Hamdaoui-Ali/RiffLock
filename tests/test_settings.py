@@ -65,7 +65,11 @@ def test_settings_service_can_start_riff_enrollment(tmp_path: Path) -> None:
 
     service.start_riff_enrollment(password_confirmation="StrongPass123!")
 
-    riff_enrollment_service.enroll.assert_called_once_with(owner.id, "StrongPass123!")
+    riff_enrollment_service.enroll.assert_called_once_with(
+        owner.id,
+        "StrongPass123!",
+        before_recording=None,
+    )
 
 
 def test_settings_service_cannot_disable_riff_2fa_without_password_confirmation(tmp_path: Path) -> None:

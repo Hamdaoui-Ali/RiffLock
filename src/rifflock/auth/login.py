@@ -158,6 +158,19 @@ class LoginService:
         if self._logger is not None:
             self._logger.info("Owner session cleared on logout.")
 
+    def reset_failed_attempts(self, email: str) -> None:
+        if self._lockout_service is None:
+            return
+        normalized_email = email.strip().lower()
+        if not normalized_email:
+            return
+        self._lockout_service.reset_password_failures(normalized_email)
+        if self._logger is not None:
+            self._logger.info(
+                "Password login attempts reset from login screen for identifier=%s",
+                normalized_email,
+            )
+
     def _unlock_data_key(self, password: str, key_vault_record: KeyVaultRecord) -> bytes:
         try:
             return self._key_vault_service.unlock_data_key(password, key_vault_record)

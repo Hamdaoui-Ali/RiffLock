@@ -192,6 +192,11 @@ class _Services:
         template = RiffFeatureTemplate(
             vector=np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
             sample_rate=22050,
+            chroma_sequence=np.tile(
+                np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float32).reshape(-1, 1),
+                (1, 2),
+            ),
+            onset_count=2,
         )
         self.riff_enrollment_service = RiffEnrollmentService(
             owner_repository=self.owner_repository,

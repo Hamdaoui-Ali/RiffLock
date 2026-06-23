@@ -9,11 +9,13 @@ from typing import Callable
 from rifflock.files import (
     FileProtectionService,
     FileRestoreService,
+    FileViewingResult,
     FolderProtectionService,
     ProtectedItemService,
     ProtectedItemView,
     parse_container,
 )
+from rifflock.utils.errors import FileOperationError
 from rifflock.utils import to_user_message
 
 
@@ -142,6 +144,52 @@ class RestoreFileFlowService:
                 state=self._dashboard_data_service.load(),
             )
 
+    def prepare_file_for_opening(
+        self,
+        *,
+        protected_path: Path | str,
+        data_key: bytes,
+    ) -> FileViewingResult:
+        return self._file_restore_service.prepare_file_for_viewing(
+            protected_path=protected_path,
+            data_key=data_key,
+        )
+
+
+class DeleteProtectedItemFlowService:
+    """UI-facing protected-item deletion flow."""
+
+    def __init__(
+        self,
+        protected_item_service: ProtectedItemService,
+        dashboard_data_service: DashboardDataService,
+    ) -> None:
+        self._protected_item_service = protected_item_service
+        self._dashboard_data_service = dashboard_data_service
+
+    def delete_item(self, item: ProtectedItemView) -> DashboardActionResult:
+        artifact_path = Path(item.record.artifact_path)
+
+        try:
+            if artifact_path.exists():
+                artifact_path.unlink()
+
+            removed = self._protected_item_service.remove_metadata(item.record.id)
+            if not removed:
+                raise FileOperationError("The protected item could not be removed.")
+
+            return DashboardActionResult(
+                succeeded=True,
+                message=f"Removed {artifact_path.name} from protection.",
+                state=self._dashboard_data_service.load(),
+            )
+        except Exception as error:
+            return DashboardActionResult(
+                succeeded=False,
+                message=to_user_message(error),
+                state=self._dashboard_data_service.load(),
+            )
+
 
 class ProtectFolderFlowService:
     """UI-facing protect-folder flow built on the core folder protection service."""
@@ -214,6 +262,8 @@ def build_dashboard_screen(
     on_protect_file: Callable[[], None] | None = None,
     on_protect_folder: Callable[[], None] | None = None,
     on_restore_file: Callable[[], None] | None = None,
+    on_open_item: Callable[[ProtectedItemView], None] | None = None,
+    on_delete_item: Callable[[ProtectedItemView], None] | None = None,
     on_settings: Callable[[], None] | None = None,
     on_logout: Callable[[], None] | None = None,
 ) -> None:
@@ -288,6 +338,28 @@ def build_dashboard_screen(
         )
         meta.pack(fill="x", padx=12, pady=(0, 10))
 
+        if item.record.item_type == "file":
+            item_actions = ctk.CTkFrame(card, fg_color="transparent")
+            item_actions.pack(fill="x", padx=12, pady=(0, 10))
+
+            _add_row_button(
+                ctk,
+                item_actions,
+                "Open",
+                lambda current_item=item: on_open_item(current_item)
+                if on_open_item is not None
+                else None,
+                disabled=not item.protected_exists,
+            )
+            _add_row_button(
+                ctk,
+                item_actions,
+                "Delete",
+                lambda current_item=item: on_delete_item(current_item)
+                if on_delete_item is not None
+                else None,
+            )
+
 
 def _add_action_button(ctk, parent, text: str, command: Callable[[], None] | None = None) -> None:
     button = ctk.CTkButton(
@@ -297,3 +369,21 @@ def _add_action_button(ctk, parent, text: str, command: Callable[[], None] | Non
         command=command or (lambda: None),
     )
     button.pack(side="left", padx=(8, 0))
+
+
+def _add_row_button(
+    ctk,
+    parent,
+    text: str,
+    command: Callable[[], None] | None = None,
+    *,
+    disabled: bool = False,
+) -> None:
+    button = ctk.CTkButton(
+        parent,
+        text=text,
+        width=90,
+        command=command or (lambda: None),
+        state="disabled" if disabled else "normal",
+    )
+    button.pack(side="left", padx=(0, 8))

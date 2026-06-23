@@ -91,6 +91,38 @@ def test_restore_updates_metadata_status_where_available(tmp_path: Path) -> None
     assert stored.status == "restored"
 
 
+def test_decrypt_file_returns_original_content_without_updating_status(tmp_path: Path) -> None:
+    protect_service, restore_service, repository = _build_services(tmp_path)
+    source = tmp_path / "preview.txt"
+    source.write_text("preview me", encoding="utf-8")
+    protected = protect_service.protect_file(source, _data_key())
+
+    result = restore_service.decrypt_file(protected.output_path, _data_key())
+
+    assert result.original_filename == "preview.txt"
+    assert result.plaintext == b"preview me"
+    stored = repository.get_by_id(protected.protected_item.id)
+    assert stored is not None
+    assert stored.status == "protected"
+
+
+def test_prepare_file_for_viewing_writes_temp_copy_with_original_extension(tmp_path: Path) -> None:
+    protect_service, restore_service, repository = _build_services(tmp_path)
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-demo")
+    protected = protect_service.protect_file(source, _data_key())
+
+    result = restore_service.prepare_file_for_viewing(protected.output_path, _data_key())
+
+    assert result.original_filename == "paper.pdf"
+    assert result.viewing_path.name == "paper.pdf"
+    assert result.viewing_path.parent.parent == tmp_path / "temp"
+    assert result.viewing_path.read_bytes() == b"%PDF-demo"
+    stored = repository.get_by_id(protected.protected_item.id)
+    assert stored is not None
+    assert stored.status == "protected"
+
+
 def _build_services(tmp_path: Path):
     database_path = tmp_path / "data" / "rifflock.db"
     initialize_database(database_path)
