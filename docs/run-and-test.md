@@ -17,7 +17,7 @@ This guide explains how to:
 You need:
 
 - Windows
-- Python 3.12
+- Python 3.14
 - a microphone if you want to test riff 2FA
 
 ## 2. Open the project
@@ -384,3 +384,4 @@ The app is in a good state if all of these are true:
 - password change works
 - riff 2FA works if a microphone is available
 - logs do not expose sensitive data
+

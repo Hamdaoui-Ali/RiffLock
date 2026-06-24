@@ -203,7 +203,7 @@ Likely libraries:
 
 - `sounddevice` for recording;
 - `librosa` for feature extraction;
-- `aubio` where pitch or onset analysis is useful.
+- `aubio` only if a future iteration needs extra pitch or onset analysis beyond the current pipeline.
 
 ## Confirmed Technology Stack
 
@@ -213,7 +213,6 @@ Likely libraries:
 - cryptography AESGCM
 - sounddevice
 - librosa
-- aubio
 - PyInstaller
 - pytest
 
@@ -345,3 +344,4 @@ When major scope, security, or architecture decisions change:
 1. update this document;
 2. update the relevant Linear issue or create a new decision issue;
 3. keep naming and implementation aligned with the documented model.
+

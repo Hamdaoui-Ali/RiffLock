@@ -2,6 +2,8 @@
 
 RiffLock is a Windows desktop application for protecting local files and folders with password-based authentication and optional guitar-riff 2FA.
 
+This repo targets Python 3.14 for local development and Windows packaging.
+
 RiffLock is local-first. It stores application state in the Windows AppData directory, uses a separate wrapped data key for encryption, and treats the guitar riff as an authentication factor rather than an encryption key.
 
 ## Recovery warning
@@ -154,3 +156,4 @@ python -m pytest -q
 ```powershell
 pytest
 ```
+

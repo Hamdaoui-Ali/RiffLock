@@ -25,6 +25,7 @@ from rifflock.storage import (
     RiffTemplateRepository,
     initialize_database,
 )
+from rifflock.ui.activity import ActivityDataService
 from rifflock.ui.app import launch_app
 from rifflock.ui.dashboard import (
     DashboardDataService,
@@ -73,6 +74,12 @@ def main() -> int:
         feature_extraction_service = RiffFeatureExtractionService(logger=logger)
         protected_item_service = ProtectedItemService(protected_item_repository)
         dashboard_data_service = DashboardDataService(protected_item_service)
+        activity_data_service = ActivityDataService(
+            auth_attempt_repository=auth_attempt_repository,
+            dashboard_data_service=dashboard_data_service,
+            password_attempt_limit=config.lockout.password_attempt_limit,
+            riff_attempt_limit=config.lockout.riff_attempt_limit,
+        )
         protect_file_flow_service = ProtectFileFlowService(
             file_protection_service=FileProtectionService(
                 protected_item_repository=protected_item_repository,
@@ -132,6 +139,7 @@ def main() -> int:
             config,
             route,
             dashboard_data_service=dashboard_data_service,
+            activity_data_service=activity_data_service,
             protect_file_flow_service=protect_file_flow_service,
             protect_folder_flow_service=protect_folder_flow_service,
             restore_file_flow_service=restore_file_flow_service,
