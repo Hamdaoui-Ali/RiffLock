@@ -14,6 +14,7 @@ from rifflock.auth import (
 from rifflock.auth.riff_verification import RiffVerificationService
 from rifflock.config import AppConfig
 from rifflock.settings import SettingsService
+from rifflock.ui.activity import ActivityDataService, ActivityEvent, build_activity_screen
 from rifflock.ui.dashboard import (
     DashboardDataService,
     DeleteProtectedItemFlowService,
@@ -23,6 +24,7 @@ from rifflock.ui.dashboard import (
     build_dashboard_screen,
 )
 from rifflock.ui.login import build_login_screen
+from rifflock.ui.protect import ProtectScreenState, build_protect_screen
 from rifflock.ui.riff_verification import build_riff_verification_screen
 from rifflock.ui.routes import AppRoute
 from rifflock.ui.setup import build_setup_screen
@@ -35,6 +37,7 @@ def launch_app(
     route: AppRoute,
     *,
     dashboard_data_service: DashboardDataService | None = None,
+    activity_data_service: ActivityDataService | None = None,
     protect_file_flow_service: ProtectFileFlowService | None = None,
     protect_folder_flow_service: ProtectFolderFlowService | None = None,
     restore_file_flow_service: RestoreFileFlowService | None = None,
@@ -56,6 +59,8 @@ def launch_app(
     app.geometry("800x500")
     app.minsize(640, 400)
     current_session_data_key = session_data_key
+    current_session_owner_email: str | None = None
+    current_session_riff_2fa_enabled = False
     pending_riff_verification: PendingRiffVerification | None = None
 
     def clear_screen() -> None:
@@ -130,7 +135,7 @@ def launch_app(
         app.title(f"{config.app_name} - Login")
 
         def on_submit(email: str, password: str) -> None:
-            nonlocal current_session_data_key, pending_riff_verification
+            nonlocal current_session_data_key, current_session_owner_email, current_session_riff_2fa_enabled, pending_riff_verification
 
             try:
                 result = login_service.login(email, password)
@@ -140,6 +145,8 @@ def launch_app(
 
             if result.next_screen == "dashboard" and result.session is not None:
                 current_session_data_key = result.session.unlocked_data_key
+                current_session_owner_email = result.session.owner_email
+                current_session_riff_2fa_enabled = result.session.riff_2fa_enabled
                 render_dashboard()
                 return
 
@@ -174,46 +181,157 @@ def launch_app(
         app.title(f"{config.app_name} - Dashboard")
 
         state = dashboard_data_service.load()
+        dashboard_owner_email = current_session_owner_email
+        dashboard_riff_2fa_enabled = current_session_riff_2fa_enabled
+        if settings_service is not None:
+            try:
+                settings_state = settings_service.load()
+                dashboard_owner_email = settings_state.owner_email
+                dashboard_riff_2fa_enabled = settings_state.riff_2fa_enabled
+            except Exception:
+                pass
+
+        def default_protect_output(current_mode: str, source_path: str | None) -> str | None:
+            if not source_path:
+                return None
+            if current_mode == "folder" and protect_folder_flow_service is not None:
+                return str(protect_folder_flow_service.get_default_output_path(source_path))
+            if current_mode == "file" and protect_file_flow_service is not None:
+                return str(protect_file_flow_service.get_default_output_path(source_path))
+            return None
+
+        def render_protect_workspace(
+            mode: str = "file",
+            source_path: str | None = None,
+            output_path: str | None = None,
+            result_message: str | None = None,
+            result_succeeded: bool | None = None,
+        ) -> None:
+            normalized_mode = "folder" if mode == "folder" else "file"
+            selected_output = output_path or default_protect_output(normalized_mode, source_path)
+
+            def select_file_source() -> None:
+                selected = filedialog.askopenfilename(title="Select file to protect")
+                if not selected:
+                    return
+                render_protect_workspace(
+                    "file",
+                    selected,
+                    default_protect_output("file", selected),
+                )
+
+            def select_folder_source() -> None:
+                selected = filedialog.askdirectory(
+                    title="Select folder to protect",
+                    mustexist=True,
+                )
+                if not selected:
+                    return
+                render_protect_workspace(
+                    "folder",
+                    selected,
+                    default_protect_output("folder", selected),
+                )
+
+            def select_output() -> None:
+                if not source_path:
+                    messagebox.showerror("Protect", "Select a source before choosing an output path.")
+                    return
+                default_output = default_protect_output(normalized_mode, source_path)
+                initial_dir = None
+                initial_file = None
+                if default_output is not None:
+                    default_path = os.path.abspath(default_output)
+                    initial_dir = os.path.dirname(default_path)
+                    initial_file = os.path.basename(default_path)
+                if normalized_mode == "folder":
+                    selected = filedialog.askdirectory(
+                        title="Choose protected folder output",
+                        initialdir=initial_dir,
+                    )
+                else:
+                    selected = filedialog.asksaveasfilename(
+                        title="Choose protected file output",
+                        defaultextension=".rifflock",
+                        initialdir=initial_dir,
+                        initialfile=initial_file,
+                        filetypes=[("RiffLock files", "*.rifflock")],
+                    )
+                if not selected:
+                    return
+                render_protect_workspace(normalized_mode, source_path, selected)
+
+            def use_default_output() -> None:
+                if not source_path:
+                    messagebox.showerror("Protect", "Select a source before calculating the default output path.")
+                    return
+                render_protect_workspace(
+                    normalized_mode,
+                    source_path,
+                    default_protect_output(normalized_mode, source_path),
+                )
+
+            def submit() -> None:
+                if current_session_data_key is None:
+                    messagebox.showerror("Protect", "File protection is not available.")
+                    return
+                if not source_path:
+                    messagebox.showerror("Protect", "Select a source before starting protection.")
+                    return
+                if normalized_mode == "folder":
+                    if protect_folder_flow_service is None:
+                        messagebox.showerror("Protect Folder", "Folder protection is not available.")
+                        return
+                    result = protect_folder_flow_service.protect_folder(
+                        source_path=source_path,
+                        data_key=current_session_data_key,
+                        output_path=selected_output,
+                    )
+                else:
+                    if protect_file_flow_service is None:
+                        messagebox.showerror("Protect File", "File protection is not available.")
+                        return
+                    result = protect_file_flow_service.protect_file(
+                        source_path=source_path,
+                        data_key=current_session_data_key,
+                        output_path=selected_output,
+                    )
+                render_protect_workspace(
+                    normalized_mode,
+                    source_path,
+                    selected_output,
+                    result.message,
+                    result.succeeded,
+                )
+
+            clear_screen()
+            app.title(f"{config.app_name} - Protect")
+            build_protect_screen(
+                app,
+                ctk,
+                state=ProtectScreenState(
+                    mode=normalized_mode,
+                    owner_email=dashboard_owner_email,
+                    riff_2fa_enabled=dashboard_riff_2fa_enabled,
+                    source_path=source_path,
+                    output_path=selected_output,
+                    result_message=result_message,
+                    result_succeeded=result_succeeded,
+                ),
+                on_back=render_dashboard,
+                on_settings=render_settings,
+                on_activity=render_activity,
+                on_logout=on_logout,
+                on_switch_mode=lambda next_mode: render_protect_workspace(next_mode),
+                on_select_file_source=select_file_source,
+                on_select_folder_source=select_folder_source,
+                on_select_output=select_output,
+                on_use_default_output=use_default_output,
+                on_submit=submit,
+            )
 
         def on_protect_file() -> None:
-            if protect_file_flow_service is None or current_session_data_key is None:
-                messagebox.showerror("Protect File", "File protection is not available.")
-                return
-
-            source_path = filedialog.askopenfilename(
-                title="Select file to protect",
-            )
-            if not source_path:
-                return
-
-            use_default_output = messagebox.askyesno(
-                "Protect File",
-                "Use the default vault location for the protected file?",
-            )
-            output_path = None
-            if not use_default_output:
-                default_output = protect_file_flow_service.get_default_output_path(source_path)
-                output_path = filedialog.asksaveasfilename(
-                    title="Choose protected file output",
-                    defaultextension=".rifflock",
-                    initialdir=str(default_output.parent),
-                    initialfile=default_output.name,
-                    filetypes=[("RiffLock files", "*.rifflock")],
-                )
-                if not output_path:
-                    return
-
-            result = protect_file_flow_service.protect_file(
-                source_path=source_path,
-                data_key=current_session_data_key,
-                output_path=output_path,
-            )
-            if result.succeeded:
-                messagebox.showinfo("Protect File", result.message)
-            else:
-                messagebox.showerror("Protect File", result.message)
-            render_dashboard()
-
+            render_protect_workspace("file")
         def on_restore_file() -> None:
             if restore_file_flow_service is None or current_session_data_key is None:
                 messagebox.showerror("Restore File", "File restore is not available.")
@@ -254,37 +372,41 @@ def launch_app(
                 messagebox.showerror("Restore File", result.message)
             render_dashboard()
 
-        def on_protect_folder() -> None:
-            if protect_folder_flow_service is None or current_session_data_key is None:
-                messagebox.showerror("Protect Folder", "Folder protection is not available.")
+        def on_restore_item(item) -> None:
+            if restore_file_flow_service is None or current_session_data_key is None:
+                messagebox.showerror("Restore File", "File restore is not available.")
                 return
-
-            source_path = filedialog.askdirectory(
-                title="Select folder to protect",
-                mustexist=True,
+            if not item.protected_exists:
+                messagebox.showerror("Restore File", "The encrypted artifact is missing.")
+                return
+            try:
+                default_output = restore_file_flow_service.get_default_output_path(item.record.artifact_path)
+            except Exception:
+                messagebox.showerror(
+                    "Restore File",
+                    "The selected .rifflock file could not be restored.",
+                )
+                return
+            output_path = filedialog.asksaveasfilename(
+                title="Choose restored file output",
+                initialdir=str(default_output.parent),
+                initialfile=default_output.name,
             )
-            if not source_path:
+            if not output_path:
                 return
-
-            confirmed = messagebox.askyesno(
-                "Protect Folder",
-                "Protect all supported files in this folder recursively?",
-            )
-            if not confirmed:
-                return
-
-            default_output = protect_folder_flow_service.get_default_output_path(source_path)
-            result = protect_folder_flow_service.protect_folder(
-                source_path=source_path,
+            result = restore_file_flow_service.restore_file(
+                protected_path=item.record.artifact_path,
                 data_key=current_session_data_key,
-                output_path=default_output,
+                output_path=output_path,
             )
             if result.succeeded:
-                messagebox.showinfo("Protect Folder", result.message)
+                messagebox.showinfo("Restore File", result.message)
             else:
-                messagebox.showerror("Protect Folder", result.message)
+                messagebox.showerror("Restore File", result.message)
             render_dashboard()
 
+        def on_protect_folder() -> None:
+            render_protect_workspace("folder")
         def on_open_item(item) -> None:
             if restore_file_flow_service is None or current_session_data_key is None:
                 messagebox.showerror("Open File", "File opening is not available.")
@@ -448,10 +570,76 @@ def launch_app(
                     on_disable_riff_2fa=on_disable_riff_2fa,
                     on_open_app_data_folder=on_open_app_data_folder,
                     on_back=render_dashboard,
+                    on_protect_file=on_protect_file,
+                    on_restore_file=on_restore_file,
+                    on_activity=render_activity,
+                    on_logout=on_logout,
                 )
 
             render_settings_with_state(state)
 
+
+        def render_activity() -> None:
+            if activity_data_service is None:
+                messagebox.showerror("Activity", "Activity data is not available.")
+                return
+
+            try:
+                activity_state = activity_data_service.load(owner_email=dashboard_owner_email)
+            except Exception as error:
+                messagebox.showerror("Activity", to_user_message(error))
+                return
+
+            def on_export(events: list[ActivityEvent]) -> None:
+                if not events:
+                    messagebox.showinfo("Activity", "There are no visible activity rows to export.")
+                    return
+                output_path = filedialog.asksaveasfilename(
+                    title="Export audit trail",
+                    defaultextension=".log",
+                    initialfile="rifflock-audit-trail.log",
+                    filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
+                )
+                if not output_path:
+                    return
+                lines = ["RiffLock local audit trail", ""]
+                for event in events:
+                    lines.append(
+                        " | ".join(
+                            (
+                                event.timestamp,
+                                event.event_type.upper(),
+                                event.title,
+                                event.identifier,
+                                event.status.upper(),
+                                event.detail,
+                                event.secondary,
+                            )
+                        )
+                    )
+                try:
+                    with open(output_path, "w", encoding="utf-8") as audit_file:
+                        audit_file.write("\n".join(lines) + "\n")
+                except Exception as error:
+                    messagebox.showerror("Activity", to_user_message(error))
+                    return
+                messagebox.showinfo("Activity", f"Audit trail exported to {output_path}.")
+
+            clear_screen()
+            app.title(f"{config.app_name} - Activity")
+            build_activity_screen(
+                app,
+                ctk,
+                state=activity_state,
+                owner_email=dashboard_owner_email,
+                riff_2fa_enabled=dashboard_riff_2fa_enabled,
+                on_dashboard=render_dashboard,
+                on_protect_file=on_protect_file,
+                on_restore_file=on_restore_file,
+                on_settings=render_settings,
+                on_logout=on_logout,
+                on_export=on_export,
+            )
         build_dashboard_screen(
             app,
             ctk,
@@ -460,9 +648,13 @@ def launch_app(
             on_protect_folder=on_protect_folder,
             on_restore_file=on_restore_file,
             on_open_item=on_open_item,
+            on_restore_item=on_restore_item,
             on_delete_item=on_delete_item,
             on_settings=render_settings,
+            on_activity=render_activity,
             on_logout=on_logout,
+            owner_email=dashboard_owner_email,
+            riff_2fa_enabled=dashboard_riff_2fa_enabled,
         )
 
     def render_riff_verification() -> None:
@@ -476,7 +668,7 @@ def launch_app(
         app.title(f"{config.app_name} - Riff Verification")
 
         def on_verify() -> None:
-            nonlocal current_session_data_key, pending_riff_verification
+            nonlocal current_session_data_key, current_session_owner_email, current_session_riff_2fa_enabled, pending_riff_verification
 
             try:
                 show_recording_countdown(
@@ -490,6 +682,8 @@ def launch_app(
                 return
 
             current_session_data_key = session.unlocked_data_key
+            current_session_owner_email = session.owner_email
+            current_session_riff_2fa_enabled = session.riff_2fa_enabled
             pending_riff_verification = None
             render_dashboard()
 
@@ -499,6 +693,13 @@ def launch_app(
             )
             messagebox.showinfo("Riff Verification", "Riff tries have been reset.")
 
+        recording_duration_seconds = None
+        if settings_service is not None:
+            try:
+                recording_duration_seconds = settings_service.load().recording_duration_seconds
+            except Exception:
+                recording_duration_seconds = None
+
         build_riff_verification_screen(
             app,
             ctk,
@@ -506,14 +707,17 @@ def launch_app(
             on_verify=on_verify,
             on_reset_attempts=on_reset_attempts,
             on_cancel=on_logout,
+            recording_duration_seconds=recording_duration_seconds,
         )
 
     def on_logout() -> None:
-        nonlocal current_session_data_key, pending_riff_verification
+        nonlocal current_session_data_key, current_session_owner_email, current_session_riff_2fa_enabled, pending_riff_verification
 
         if login_service is not None:
             login_service.logout()
         current_session_data_key = None
+        current_session_owner_email = None
+        current_session_riff_2fa_enabled = False
         pending_riff_verification = None
         messagebox.showinfo("Logout", "You have been logged out.")
         render_login()

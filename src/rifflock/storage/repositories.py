@@ -423,6 +423,18 @@ class AuthAttemptRepository(BaseRepository[AuthAttemptRecord]):
             ).fetchone()
         return None if row is None else _auth_attempt_from_row(row)
 
+    def list_recent(self, limit: int = 100) -> list[AuthAttemptRecord]:
+        bounded_limit = max(min(limit, 500), 1)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM auth_attempts
+                ORDER BY attempted_at DESC, id DESC
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+        return [_auth_attempt_from_row(row) for row in rows]
     def list_by_identifier_and_type(
         self,
         identifier: str,

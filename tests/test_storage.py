@@ -145,6 +145,18 @@ def test_repositories_can_save_read_update_and_delete_records(tmp_path: Path) ->
     )
     assert auth_attempt_repo.get_by_id(auth_attempt.id) == auth_attempt
 
+    newer_auth_attempt = auth_attempt_repo.save(
+        AuthAttemptRecord(
+            id=None,
+            attempt_type="riff",
+            identifier="owner@example.com",
+            was_successful=False,
+            failure_reason="invalid_riff",
+            attempted_at="2026-06-22T00:00:06Z",
+        )
+    )
+    assert auth_attempt_repo.list_recent(limit=1) == [newer_auth_attempt]
+
     setting = settings_repo.save(
         AppSettingRecord(
             id=None,

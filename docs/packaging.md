@@ -17,7 +17,7 @@ Package RiffLock as a Windows desktop executable using PyInstaller without movin
 ## Build prerequisites
 
 - Windows
-- Python 3.12
+- Python 3.14
 - A virtual environment with `requirements.txt` installed
 
 ## Build command
@@ -38,7 +38,6 @@ The spec explicitly collects data or submodules for:
 - `customtkinter`
 - `librosa`
 - `sounddevice`
-- `aubio`
 - `argon2`
 - `cryptography`
 
@@ -65,3 +64,4 @@ These are included because they are central to the UI, audio pipeline, password 
 ## Clean-profile check
 
 Where possible, repeat the first-launch smoke test on a clean Windows user profile to catch missing packaged dependencies or accidental local-environment coupling.
+
